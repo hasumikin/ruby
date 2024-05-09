@@ -2070,7 +2070,7 @@ parser_string_end_with_newline_p(struct parser_params *p, rb_parser_string_t *st
     return PARSER_STRING_LEN(str) > 0 && PARSER_STRING_END(str)[-1] == '\n';
 }
 
-static rb_parser_string_t *
+rb_parser_string_t *
 rb_parser_string_new(rb_parser_t *p, const char *ptr, long len)
 {
     rb_parser_string_t *str;

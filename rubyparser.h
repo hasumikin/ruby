@@ -1424,6 +1424,7 @@ rb_parser_t *rb_ruby_parser_new(const rb_parser_config_t *config);
 
 long rb_parser_string_length(rb_parser_string_t *str);
 char *rb_parser_string_pointer(rb_parser_string_t *str);
+rb_parser_string_t *rb_parser_string_new(rb_parser_t *p, const char *ptr, long len);
 
 RUBY_SYMBOL_EXPORT_END
 
