@@ -1026,6 +1026,91 @@ CODE
     assert_raise(FrozenError) { S('foo').freeze.setbyte(0, 0x61) }
   end
 
+  def test_bit_at
+    s = S("\xAA\x80")
+    assert_equal(false, s.bit_at(0))
+    assert_equal(true, s.bit_at(1))
+    assert_equal(true, s.bit_at(7))
+    assert_equal(true, s.bit_at(0, lsb_first: false))
+    assert_equal(false, s.bit_at(1, lsb_first: false))
+    assert_equal(true, s.bit_at(8, lsb_first: false))
+    assert_nil(s.bit_at(16))
+    assert_raise(IndexError) { s.bit_at(-1) }
+    assert_raise(ArgumentError) { s.bit_at(2**100) }
+    assert_raise(ArgumentError) { s.bit_at(0, lsb_first: nil) }
+  end
+
+  def test_bit_set_clear_flip
+    s = S("\x00")
+    assert_same(s, s.bit_set(1))
+    assert_equal(S("\x02"), s)
+    assert_same(s, s.bit_clear(1))
+    assert_equal(S("\x00"), s)
+    assert_same(s, s.bit_flip(1))
+    assert_equal(S("\x02"), s)
+    assert_same(s, s.bit_flip(1))
+    assert_equal(S("\x00"), s)
+
+    s.bit_set(1, lsb_first: false)
+    assert_equal(S("\x40"), s)
+    s.bit_clear(1, lsb_first: false)
+    assert_equal(S("\x00"), s)
+
+    assert_raise(IndexError) { S("\x00").bit_set(8) }
+    assert_raise(IndexError) { S("\x00").bit_clear(-1) }
+    assert_raise(IndexError) { S("\x00").bit_flip(8) }
+    assert_raise(ArgumentError) { S("\x00").bit_set(0, lsb_first: nil) }
+    assert_raise(FrozenError) { S("\x00").freeze.bit_set(0) }
+
+    shared = S("fooXbar").split(S("X")).last
+    shared.bit_set(0)
+    assert_equal(S("car"), shared)
+  end
+
+  def test_bit_count
+    assert_equal(0, S("").bit_count)
+    assert_equal(0, S("\x00").bit_count)
+    assert_equal(8, S("\xFF").bit_count)
+    assert_equal(8, S("\xAA\xF0").bit_count)
+    assert_raise(ArgumentError) { S("\x00").bit_count(0) }
+    assert_raise(ArgumentError) { S("\x00").bit_count(lsb_first: false) }
+  end
+
+  def test_bitwise
+    s = S("\x00\xAA")
+    result = s.bitwise_not
+    assert_equal(S("\xFF\x55"), result)
+    assert_not_same(s, result)
+    assert_equal(S("\x00\xAA"), s)
+    assert_equal(s.encoding, result.encoding)
+
+    assert_same(s, s.bitwise_not!)
+    assert_equal(S("\xFF\x55"), s)
+
+    assert_equal(S("\xC0"), S("\xF0").bitwise_and(S("\xCC")))
+    assert_equal(S("\xFC"), S("\xF0").bitwise_or(S("\x0C")))
+    assert_equal(S("\x3C"), S("\xF0").bitwise_xor(S("\xCC")))
+
+    s = S("\xF0")
+    assert_same(s, s.bitwise_and!(S("\xCC")))
+    assert_equal(S("\xC0"), s)
+    assert_same(s, s.bitwise_or!(S("\x0C")))
+    assert_equal(S("\xCC"), s)
+    assert_same(s, s.bitwise_xor!(S("\xFF")))
+    assert_equal(S("\x33"), s)
+
+    other = Object.new
+    def other.to_str
+      "\xCC"
+    end
+    assert_equal(S("\xC0"), S("\xF0").bitwise_and(other))
+
+    assert_raise(ArgumentError) { S("\x00").bitwise_and(S("\x00\x00")) }
+    assert_raise(TypeError) { S("\x00").bitwise_or(Object.new) }
+    assert_raise(FrozenError) { S("\x00").freeze.bitwise_not! }
+    assert_raise(FrozenError) { S("\x00").freeze.bitwise_xor!(S("\x00")) }
+  end
+
   def test_each_codepoint
     # Single byte optimization
     assert_equal 65, S("ABC").each_codepoint.next
