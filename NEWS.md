@@ -168,6 +168,9 @@ Note: We're only listing outstanding class updates.
     * `String#each_bit`, `String#bits`, `String#each_bit_offset` and
       `String#bit_offsets` are added to iterate over the bits of a string
       or over the offsets of its set or cleared bits. [[Feature #22399]]
+    * `String#bit_run_length`, `String#each_bit_run` and `String#bit_runs`
+      are added to measure and iterate over runs of equal bits.
+      [[Feature #xxxxx]]
     * `String#tr` now accept a Hash for multi-character replacement.
       [[Feature #22238]]
 
@@ -579,7 +582,7 @@ A lot of work has gone into making Ractors more stable, performant, and usable. 
 [Feature #22238]: https://bugs.ruby-lang.org/issues/22238
 [Feature #22279]: https://bugs.ruby-lang.org/issues/22279
 [Feature #22297]: https://bugs.ruby-lang.org/issues/22297
-[Feature #22399]: https://bugs.ruby-lang.org/issues/22399
+[Feature #xxxxx]: https://bugs.ruby-lang.org/issues/xxxxx
 [PR #17201]: https://github.com/ruby/ruby/pull/17201
 [GH-psych #805]: https://github.com/ruby/psych/pull/805
 [RubyGems-v4.0.4]: https://github.com/rubygems/rubygems/releases/tag/v4.0.4

@@ -1609,6 +1609,171 @@ CODE
     assert_raise_with_message(ArgumentError, "no bit length given") { data.bit_offsets(1, 8) }
   end
 
+  def test_bit_run_length
+    data = S("\x0F\x01")
+    assert_equal(4, data.bit_run_length(1, 0))
+    assert_equal(3, data.bit_run_length(1, 1))
+    assert_equal(4, data.bit_run_length(0, 4))
+    assert_equal(0, data.bit_run_length(1, 4))
+    assert_equal(1, data.bit_run_length(1, 8))
+    assert_equal(7, data.bit_run_length(0, 9))
+    assert_equal(1, data.bit_run_length(0, 15))
+    assert_equal(4, data.bit_run_length(true, 0))
+    assert_equal(4, data.bit_run_length(false, 4))
+
+    # A run that spans whole bytes is counted without visiting each bit.
+    long = S("\x00") + S("\xFF") * 3 + S("\x7F")
+    assert_equal(31, long.bit_run_length(1, 8))
+    assert_equal(29, long.bit_run_length(1, 10))
+    assert_equal(8, long.bit_run_length(0, 0))
+    assert_equal(1, long.bit_run_length(0, 39))
+    assert_equal(64, (S("\xFF") * 8).bit_run_length(1, 0))
+
+    # MSB-first numbering mirrors the bits within each byte.
+    assert_equal(4, S("\x0F").bit_run_length(0, 0, lsb_first: false))
+    assert_equal(0, S("\x0F").bit_run_length(1, 0, lsb_first: false))
+    assert_equal(4, S("\x0F").bit_run_length(1, 4, lsb_first: false))
+    assert_equal(12, S("\x0F\xFF").bit_run_length(1, 4, lsb_first: false))
+
+    # Out of range reads return nil, as bit_get does.
+    assert_nil(data.bit_run_length(1, 16))
+    assert_nil(data.bit_run_length(0, 100))
+    assert_nil(S("").bit_run_length(0, 0))
+    assert_nil(data.bit_run_length(1, 2**62))
+
+    # The offset is coerced before the length is read.
+    shrink = Class.new do
+      def initialize(str, value); @str = str; @value = value; end
+      def to_int; @str.replace("".b); @value; end
+    end
+    s = S("\xFF") * 8
+    assert_nil(s.bit_run_length(1, shrink.new(s, 0)))
+
+    assert_equal(4, S("\x0F").freeze.bit_run_length(1, 0))
+
+    assert_raise(ArgumentError) { data.bit_run_length(1) }
+    assert_raise_with_message(ArgumentError, "bit must be 0, 1, true, or false") { data.bit_run_length(2, 0) }
+    assert_raise(TypeError) { data.bit_run_length(nil, 0) }
+    assert_raise(IndexError) { data.bit_run_length(1, -1) }
+    assert_raise(ArgumentError) { data.bit_run_length(1, 2**100) }
+    assert_raise(TypeError) { data.bit_run_length(1, nil) }
+    assert_raise(ArgumentError) { data.bit_run_length(1, 0, lsb_first: nil) }
+    assert_raise(ArgumentError) { data.bit_run_length(1, 0, 4) }
+  end
+
+  def test_each_bit_run
+    data = S("\x0F\x01")
+    runs = [[1, 0, 4], [0, 4, 4], [1, 8, 1], [0, 9, 7]]
+    assert_equal(runs, data.each_bit_run.to_a)
+    assert_equal([[0, 0, 4], [1, 4, 4]], S("\x0F").each_bit_run(lsb_first: false).to_a)
+    assert_equal([[0, 0, 8]], S("\x00").each_bit_run.to_a)
+    assert_equal([[1, 0, 64]], (S("\xFF") * 8).each_bit_run.to_a)
+    assert_equal([], S("").each_bit_run.to_a)
+    alternating = (0...8).map {|i| [i % 2, i, 1] }
+    assert_equal(alternating, S("\xAA").each_bit_run.to_a)
+
+    # Runs are cut at the region boundaries and offsets stay absolute.
+    assert_equal([[1, 2, 2], [0, 4, 4], [1, 8, 1], [0, 9, 1]], data.each_bit_run(2, 8).to_a)
+    assert_equal([[1, 8, 1], [0, 9, 7]], data.each_bit_run(8..).to_a)
+    assert_equal([[0, 5, 3], [1, 8, 1]], data.each_bit_run(5...9).to_a)
+    assert_equal([[1, 3, 1]], data.each_bit_run(3, 1).to_a)
+    assert_equal([], data.each_bit_run(0, 0).to_a)
+    assert_equal([], data.each_bit_run(5..2).to_a)
+    # Reads clamp.
+    assert_equal([[0, 12, 4]], data.each_bit_run(12, 100).to_a)
+    assert_equal([], data.each_bit_run(16, 8).to_a)
+    assert_equal([], data.each_bit_run(100..).to_a)
+    assert_equal([], data.each_bit_run(2**62, 8).to_a)
+
+    # With a block, yields each run as one Array and returns self.
+    yielded = []
+    assert_same(data, data.each_bit_run {|bit, offset, length| yielded << [bit, offset, length] })
+    assert_equal(runs, yielded)
+    yielded = []
+    data.each_bit_run {|run| yielded << run }
+    assert_equal(runs, yielded)
+    assert_same(data, data.each_bit_run(100, 8) {|*| flunk })
+
+    # Without a block, returns a sized Enumerator.
+    enum = data.each_bit_run
+    assert_instance_of(Enumerator, enum)
+    assert_equal(4, enum.size)
+    assert_equal(4, data.each_bit_run(2, 8).size)
+    assert_equal(2, data.each_bit_run(8..).size)
+    assert_equal(1, data.each_bit_run(12, 100).size)
+    assert_equal(0, data.each_bit_run(100, 8).size)
+    assert_equal(2, S("\x0F").each_bit_run(lsb_first: false).size)
+    assert_equal(8, S("\xAA").each_bit_run.size)
+    assert_equal(1, (S("\xFF") * 8).each_bit_run.size)
+    assert_equal(0, S("").each_bit_run.size)
+    # The size follows the current contents of self.
+    m = S("\x0F\x01")
+    enum = m.each_bit_run
+    m.replace("\x0F")
+    assert_equal(2, enum.size)
+
+    assert_equal(runs, S("\x0F\x01").freeze.each_bit_run.to_a)
+
+    # Errors are raised even without a block.  The region parser itself is
+    # covered by test_bit_count_region.
+    assert_raise_with_message(ArgumentError, "no bit length given") { data.each_bit_run(0) }
+    assert_raise(IndexError) { data.each_bit_run(-1, 4) }
+    assert_raise(ArgumentError) { data.each_bit_run(0, -1) }
+    assert_raise(ArgumentError) { data.each_bit_run(lsb_first: nil) }
+    assert_raise(TypeError) { data.each_bit_run(0, nil) }
+    assert_raise(ArgumentError) { data.each_bit_run(0, 4, 8) }
+  end
+
+  def test_each_bit_run_mutation_in_block
+    # The block may resize self.  The next run is read from the current
+    # contents and the iteration stops at the new end.
+    s = S("\x0F\x0F\x0F")
+    yielded = []
+    s.each_bit_run {|bit, offset, length| yielded << [bit, offset, length]; s.replace("\x0F".b) if yielded.size == 1 }
+    assert_equal([[1, 0, 4], [0, 4, 4]], yielded)
+
+    s = S("\x0F\x0F")
+    yielded = []
+    s.each_bit_run {|bit, offset, length| yielded << [bit, offset, length]; s.clear if yielded.size == 1 }
+    assert_equal([[1, 0, 4]], yielded)
+
+    # A run that reaches the end is clamped to the end at the time it is read.
+    s = S("\xFF\xFF")
+    yielded = []
+    s.each_bit_run {|bit, offset, length| yielded << [bit, offset, length]; s.clear }
+    assert_equal([[1, 0, 16]], yielded)
+
+    # Growing self does not extend the iteration beyond the original region.
+    s = S("\x0F")
+    yielded = []
+    s.each_bit_run {|bit, offset, length| yielded << [bit, offset, length]; s << "\xFF".b }
+    assert_equal([[1, 0, 4], [0, 4, 4]], yielded)
+  end
+
+  def test_bit_runs
+    data = S("\x0F\x01")
+    runs = [[1, 0, 4], [0, 4, 4], [1, 8, 1], [0, 9, 7]]
+    assert_equal(runs, data.bit_runs)
+    assert_equal([[0, 0, 4], [1, 4, 4]], S("\x0F").bit_runs(lsb_first: false))
+    assert_equal([], S("").bit_runs)
+    assert_equal([[1, 4], [0, 4], [1, 1], [0, 7]], data.bit_runs.map {|bit, _, length| [bit, length] })
+
+    # Regions and clamping are shared with each_bit_run; see test_each_bit_run.
+    assert_equal([[1, 8, 1], [0, 9, 7]], data.bit_runs(8..))
+    assert_equal([[0, 12, 4]], data.bit_runs(12, 100))
+    assert_equal([], data.bit_runs(100, 8))
+
+    # With a block, behaves like each_bit_run and returns self.
+    yielded = []
+    assert_same(data, data.bit_runs {|bit, offset, length| yielded << [bit, offset, length] })
+    assert_equal(runs, yielded)
+    assert_same(data, data.bit_runs(100, 8) {|*| flunk })
+
+    assert_equal(runs, S("\x0F\x01").freeze.bit_runs)
+
+    assert_raise_with_message(ArgumentError, "no bit length given") { data.bit_runs(0) }
+  end
+
   def test_bitwise
     s = S("\x00\xAA")
     result = s.bitwise_not

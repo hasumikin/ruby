@@ -1,0 +1,23 @@
+Returns an array of the runs of equal bits of +self+. Each element is an
+array of the bit (+0+ or +1+), the zero-based offset of the first bit of the
+run, and the length of the run, in increasing order of offset:
+
+  data = "\x0F\x01"
+  data.bit_runs # => [[1, 0, 4], [0, 4, 4], [1, 8, 1], [0, 9, 7]]
+
+The arguments select the region and the bit numbering in the same way as
+String#each_bit_run:
+
+  data.bit_runs(8..)                    # => [[1, 8, 1], [0, 9, 7]]
+  "\x0F".bit_runs(lsb_first: false)     # => [[0, 0, 4], [1, 4, 4]]
+
+The result is a run-length encoding of the bits. The offsets are redundant
+with the lengths, so drop them for a compact form:
+
+  data.bit_runs.map {|bit, _, length| [bit, length] }
+  # => [[1, 4], [0, 4], [1, 1], [0, 7]]
+
+With a block given, behaves like String#each_bit_run: calls the block with
+each run and returns +self+.
+
+Raises the same exceptions as String#each_bit_run.

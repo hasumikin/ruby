@@ -7704,6 +7704,193 @@ rb_str_bit_offsets(int argc, VALUE *argv, VALUE str)
     return rb_str_enumerate_bit_offsets(str, &region, bit, ary);
 }
 
+/*
+ * Count the consecutive bits equal to bit from beg up to end (exclusive) in
+ * logical order, stopping at the first bit that differs.  Whole bytes that
+ * match are skipped without visiting their bits.  The caller guarantees
+ * beg < end and that end is within the string; only the former can be
+ * checked here.
+ *
+ * The scan is deliberately byte-wise.  A word-wise scan with ntz_int64 and
+ * friends from internal/bits.h would be faster for long runs, but the byte
+ * loop is already bounded by the memory read, and MSB-first numbering would
+ * need a bit reversal per byte.  Switch only when a measurement asks for it.
+ */
+static uint64_t
+str_bit_run_length(const unsigned char *ptr, uint64_t beg, uint64_t end, int bit, bool lsb_first)
+{
+    unsigned char invert = bit ? 0 : 0xFF;
+    uint64_t pos = beg;
+
+    RUBY_ASSERT(beg < end);
+    while (pos < end) {
+        long byte_index = (long)(pos / CHAR_BIT);
+        unsigned int lo = (unsigned int)(pos % CHAR_BIT);
+        unsigned int hi = ((end - 1) / CHAR_BIT == (uint64_t)byte_index) ? (unsigned int)((end - 1) % CHAR_BIT) : 7;
+        unsigned char mask = str_bit_region_byte_mask(lo, hi, lsb_first);
+        /* A matching bit is 1 after the inversion, so a full match equals the mask. */
+        unsigned char matching = (unsigned char)((ptr[byte_index] ^ invert) & mask);
+
+        if (matching == mask) {
+            pos += hi - lo + 1;
+            continue;
+        }
+        for (unsigned int logical = lo; logical <= hi; logical++) {
+            unsigned int physical = lsb_first ? logical : 7 - logical;
+            if (!((matching >> physical) & 1)) return pos + (logical - lo) - beg;
+        }
+        UNREACHABLE;
+    }
+    return end - beg;
+}
+
+/*
+ * The number of runs of equal bits in [beg, beg+len), which is one more than
+ * the number of bit changes.  The caller guarantees len > 0.
+ *
+ * For data with many short runs, a popcount of the bit changes per byte
+ * would be faster than this walk; it is not needed yet.
+ */
+static uint64_t
+str_count_bit_runs(const unsigned char *ptr, uint64_t beg, uint64_t len, bool lsb_first)
+{
+    uint64_t pos = beg;
+    uint64_t end = beg + len;
+    uint64_t runs = 0;
+
+    RUBY_ASSERT(len > 0);
+    while (pos < end) {
+        int bit = str_get_bit_location((const char *)ptr, str_bit_location_from_offset(pos, lsb_first));
+        pos += str_bit_run_length(ptr, pos, end, bit, lsb_first);
+        runs++;
+    }
+    return runs;
+}
+
+/*
+ *  call-seq:
+ *    bit_run_length(bit, offset, lsb_first: true) -> integer or nil
+ *
+ *  :include: doc/string/bit_run_length.rdoc
+ *
+ */
+static VALUE
+rb_str_bit_run_length(int argc, VALUE *argv, VALUE str)
+{
+    VALUE bit_v, index, opts;
+
+    rb_scan_args(argc, argv, "2:", &bit_v, &index, &opts);
+    /* Coerce every argument before the string length is read, as in bit_get. */
+    bool lsb_first = str_lsb_first_from_opts(opts);
+    int bit = str_bit_arg(bit_v);
+    struct str_bit_offset offset = str_bit_offset_from_index(index);
+
+    if (str_bit_offset_out_of_range(RSTRING_LEN(str), offset.value)) {
+        return Qnil;
+    }
+    uint64_t total_bits = str_bit_size(RSTRING_LEN(str));
+    const unsigned char *ptr = (const unsigned char *)RSTRING_PTR(str);
+    return ULL2NUM(str_bit_run_length(ptr, offset.value, total_bits, bit, lsb_first));
+}
+
+/*
+ * Yield [bit, offset, length] for every run of equal bits in the region, in
+ * ascending order.  A run starts at the region start or where the bit
+ * changes, and ends where the bit changes or the region ends.  As with the
+ * other iterators, the block may modify self: the string is re-read for
+ * every run and the walk stops at the current end of the string.
+ */
+static VALUE
+rb_str_enumerate_bit_runs(VALUE str, const struct str_bit_read_region *region, VALUE ary)
+{
+    uint64_t pos = region->beg;
+    uint64_t end = region->beg + region->len;
+
+    while (pos < end) {
+        long byte_len = RSTRING_LEN(str);
+        if (str_bit_offset_out_of_range(byte_len, pos)) break;
+        uint64_t current_end = str_bit_size(byte_len);
+        if (current_end > end) current_end = end;
+
+        const unsigned char *ptr = (const unsigned char *)RSTRING_PTR(str);
+        int bit = str_get_bit_location((const char *)ptr, str_bit_location_from_offset(pos, region->lsb_first));
+        uint64_t len = str_bit_run_length(ptr, pos, current_end, bit, region->lsb_first);
+        ENUM_ELEM(ary, rb_ary_new_from_args(3, INT2FIX(bit), ULL2NUM(pos), ULL2NUM(len)));
+        pos += len;
+    }
+    if (ary)
+        return ary;
+    else
+        return str;
+}
+
+/* See rb_str_each_bit_size for why the stored arguments are parsed this way. */
+static VALUE
+rb_str_each_bit_run_size(VALUE str, VALUE args, VALUE eobj)
+{
+    VALUE v0, v1, opts;
+    struct str_bit_read_region region;
+    int argc = args ? RARRAY_LENINT(args) : 0;
+    const VALUE *argv = args ? RARRAY_CONST_PTR(args) : NULL;
+
+    int nargs = rb_scan_args_kw(RB_SCAN_ARGS_LAST_HASH_KEYWORDS, argc, argv, "02:", &v0, &v1, &opts);
+    if (!str_bit_read_region_parse(nargs, v0, v1, opts, str, &region)) {
+        return INT2FIX(0);
+    }
+    const unsigned char *ptr = (const unsigned char *)RSTRING_PTR(str);
+    return ULL2NUM(str_count_bit_runs(ptr, region.beg, region.len, region.lsb_first));
+}
+
+/*
+ *  call-seq:
+ *    each_bit_run(lsb_first: true) {|bit, offset, length| ... } -> self
+ *    each_bit_run(offset, length, lsb_first: true) {|bit, offset, length| ... } -> self
+ *    each_bit_run(range, lsb_first: true) {|bit, offset, length| ... } -> self
+ *    each_bit_run(lsb_first: true) -> enumerator
+ *    each_bit_run(offset, length, lsb_first: true) -> enumerator
+ *    each_bit_run(range, lsb_first: true) -> enumerator
+ *
+ *  :include: doc/string/each_bit_run.rdoc
+ *
+ */
+static VALUE
+rb_str_each_bit_run(int argc, VALUE *argv, VALUE str)
+{
+    VALUE v0, v1, opts;
+    struct str_bit_read_region region;
+
+    int nargs = rb_scan_args(argc, argv, "02:", &v0, &v1, &opts);
+    bool nonempty = str_bit_read_region_parse(nargs, v0, v1, opts, str, &region);
+    RETURN_SIZED_ENUMERATOR(str, argc, argv, rb_str_each_bit_run_size);
+    if (!nonempty) return str;
+    return rb_str_enumerate_bit_runs(str, &region, 0);
+}
+
+/*
+ *  call-seq:
+ *    bit_runs(lsb_first: true) -> array
+ *    bit_runs(offset, length, lsb_first: true) -> array
+ *    bit_runs(range, lsb_first: true) -> array
+ *    bit_runs(lsb_first: true) {|bit, offset, length| ... } -> self
+ *    bit_runs(offset, length, lsb_first: true) {|bit, offset, length| ... } -> self
+ *    bit_runs(range, lsb_first: true) {|bit, offset, length| ... } -> self
+ *
+ *  :include: doc/string/bit_runs.rdoc
+ *
+ */
+static VALUE
+rb_str_bit_runs(int argc, VALUE *argv, VALUE str)
+{
+    VALUE v0, v1, opts;
+    struct str_bit_read_region region;
+
+    int nargs = rb_scan_args(argc, argv, "02:", &v0, &v1, &opts);
+    bool nonempty = str_bit_read_region_parse(nargs, v0, v1, opts, str, &region);
+    VALUE ary = WANTARRAY("bit_runs", 0);
+    if (!nonempty) return ary ? ary : str;
+    return rb_str_enumerate_bit_runs(str, &region, ary);
+}
+
 static void
 str_check_bitwise_length(VALUE str, VALUE other)
 {
@@ -14569,6 +14756,9 @@ Init_String(void)
     rb_define_method(rb_cString, "bits", rb_str_bits, -1);
     rb_define_method(rb_cString, "each_bit_offset", rb_str_each_bit_offset, -1);
     rb_define_method(rb_cString, "bit_offsets", rb_str_bit_offsets, -1);
+    rb_define_method(rb_cString, "bit_run_length", rb_str_bit_run_length, -1);
+    rb_define_method(rb_cString, "each_bit_run", rb_str_each_bit_run, -1);
+    rb_define_method(rb_cString, "bit_runs", rb_str_bit_runs, -1);
     rb_define_method(rb_cString, "bitwise_not", rb_str_bitwise_not, 0);
     rb_define_method(rb_cString, "bitwise_not!", rb_str_bitwise_not_bang, 0);
     rb_define_method(rb_cString, "bitwise_and", rb_str_bitwise_and, 1);

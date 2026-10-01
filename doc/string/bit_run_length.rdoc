@@ -1,0 +1,30 @@
+Returns the length of the run of bits equal to +bit+ that begins at the
+zero-based bit +offset+; that is, the number of consecutive bits equal to
++bit+ from +offset+ up to the first bit that differs or the end of +self+:
+
+  data = "\x0F\x01"
+  data.bit_run_length(1, 0) # => 4
+  data.bit_run_length(0, 4) # => 4
+  data.bit_run_length(1, 4) # => 0
+  data.bit_run_length(0, 9) # => 7
+
+Returns +nil+ if +offset+ is at or beyond the end of +self+:
+
+  data.bit_run_length(1, 16) # => nil
+
++bit+ is +1+ or +true+ to count the set bits, or +0+ or +false+ to count
+the cleared bits.
+
+By default, bits within each byte are numbered from least-significant to
+most-significant. If +lsb_first+ is +false+, byte order is unchanged but bits
+within each byte are numbered from most-significant to least-significant:
+
+  "\x0F".bit_run_length(0, 0, lsb_first: false) # => 4
+  "\x0F".bit_run_length(1, 0, lsb_first: false) # => 0
+
+Raises +ArgumentError+ if +bit+ is an Integer other than +0+ or +1+.
+Raises +TypeError+ if +bit+ is neither +true+ nor +false+ and cannot be
+converted to an Integer with +to_int+.
+Raises +IndexError+ if +offset+ is negative.
+Raises +ArgumentError+ if +offset+ is too large to be represented.
+Raises +ArgumentError+ if +lsb_first+ is neither +true+ nor +false+.
