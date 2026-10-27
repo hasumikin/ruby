@@ -1,0 +1,44 @@
+Returns the zero-based bit offset of the first bit in +self+ that is equal
+to +bit+, or +nil+ if there is no such bit.
+
++bit+ is +0+, +1+, +true+ or +false+; +true+ and +false+ are aliases for
++1+ and +0+:
+
+  data = "\xF0"
+  data.bit_index(1)     # => 4
+  data.bit_index(0)     # => 0
+  data.bit_index(true)  # => 4
+  "\x00".bit_index(1)   # => nil
+
+With +offset+, the search begins at zero-based bit +offset+.
+The returned offset is still counted from the start of +self+:
+
+  data.bit_index(1, 5)  # => 5
+  data.bit_index(0, 4)  # => nil
+  data.bit_index(1, 8)  # => nil
+
+With +length+ or +range+, the search is limited to a window of bits, given as
+for #bit_count. The search stops at the end of the window or at the end of
++self+, whichever comes first:
+
+  data.bit_index(1, 0, 4)   # => nil
+  data.bit_index(1, 0...4)  # => nil
+  data.bit_index(1, 4..)    # => 4
+  data.bit_index(1, 7, 100) # => 7
+
+A byte that holds no matching bit is skipped in one step, so a search over
+sparse data is fast.
+
+By default, bits within each byte are numbered from least-significant to
+most-significant. If +lsb_first+ is +false+, byte order is unchanged but bits
+within each byte are numbered from most-significant to least-significant:
+
+  "\xF0".bit_index(1, lsb_first: false) # => 0
+  "\xF0".bit_index(0, lsb_first: false) # => 4
+
+The search is over the bytes of +self+ and is independent of string encoding.
+Raises +IndexError+ if +offset+ or an endpoint of +range+ is negative.
+Raises +ArgumentError+ if +length+ is negative.
+Raises +ArgumentError+ if +offset+ or +length+ is too large to be represented.
+Raises +ArgumentError+ if +bit+ is an Integer other than +0+ or +1+.
+Raises +ArgumentError+ if +lsb_first+ is neither +true+ nor +false+.

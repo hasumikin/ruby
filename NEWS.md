@@ -198,6 +198,8 @@ Note: We're only listing outstanding class updates.
       (with their `!` variants) handle whole strings. [[Feature #22118]]
     * `String#tr` now accept a Hash for multi-character replacement.
       [[Feature #22238]]
+    * `String#bit_index` finds the next bit of a given value.
+      [[Feature #YYYYY]]
 
 * Symbol
 
@@ -753,6 +755,7 @@ A lot of work has gone into making Ractors more stable, performant, and usable. 
 [Feature #22309]: https://bugs.ruby-lang.org/issues/22309
 [Feature #22400]: https://bugs.ruby-lang.org/issues/22400
 [Feature #22441]: https://bugs.ruby-lang.org/issues/22441
+[Feature #YYYYY]: https://bugs.ruby-lang.org/issues/YYYYY
 [PR #17201]: https://github.com/ruby/ruby/pull/17201
 [GH-psych #805]: https://github.com/ruby/psych/pull/805
 [prism-v1.8.0]: https://github.com/ruby/prism/releases/tag/v1.8.0
