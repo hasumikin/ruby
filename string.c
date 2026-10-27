@@ -7069,13 +7069,10 @@ str_get_bit_location(const char *ptr, struct str_bit_location location)
     return (((unsigned char)ptr[location.byte_index]) >> location.bit_offset) & 1;
 }
 
+/* The bit at a coerced offset, or -1 beyond the end of str. */
 static int
-str_bit_get(int argc, VALUE *argv, VALUE str)
+str_bit_get_at(VALUE str, struct str_bit_offset offset, bool lsb_first)
 {
-    VALUE index;
-    bool lsb_first = str_lsb_first(argc, argv, &index);
-    struct str_bit_offset offset = str_bit_offset_from_index(index);
-
     if (str_bit_offset_out_of_range(RSTRING_LEN(str), offset.value)) {
         return -1;
     }
@@ -7088,9 +7085,89 @@ str_bit_get(int argc, VALUE *argv, VALUE str)
     }
 }
 
+static int
+str_bit_get(int argc, VALUE *argv, VALUE str)
+{
+    VALUE index;
+    bool lsb_first = str_lsb_first(argc, argv, &index);
+    return str_bit_get_at(str, str_bit_offset_from_index(index), lsb_first);
+}
+
+/*
+ * Read the logical bits [beg, beg+len) of ptr as an unsigned Integer.
+ *
+ * With lsb_first, the first bit of the region is the least significant bit
+ * of the result, so a byte-aligned region reads as a little-endian number.
+ * With MSB-first numbering, the first bit of the region is the most
+ * significant bit of the result, which is the wire order of RFC bit
+ * diagrams and of MSB-first packed formats.
+ *
+ * The bits are gathered one byte at a time into a little-endian buffer:
+ * a uint64_t for regions up to 64 bits, a heap buffer for larger ones.
+ */
+static VALUE
+str_bit_region_read(const unsigned char *ptr, uint64_t beg, uint64_t len, bool lsb_first)
+{
+    uint64_t end = beg + len;
+    uint64_t pos = beg;
+    uint64_t small = 0;
+    VALUE tmp = 0;
+    unsigned char *buf = NULL;
+    size_t buf_len = 0;
+
+    if (len > 64) {
+        buf_len = (size_t)((len + CHAR_BIT - 1) / CHAR_BIT);
+        buf = ALLOCV_N(unsigned char, tmp, buf_len);
+        memset(buf, 0, buf_len);
+    }
+
+    while (pos < end) {
+        rb_len_t byte_index = (rb_len_t)(pos / CHAR_BIT);
+        unsigned int lo = (unsigned int)(pos % CHAR_BIT);
+        unsigned int hi = ((end - 1) / CHAR_BIT == (uint64_t)byte_index) ? (unsigned int)((end - 1) % CHAR_BIT) : 7;
+        unsigned int n = hi - lo + 1;
+        unsigned int chunk;
+        uint64_t shift;
+
+        /*
+         * Extract the n logical bits lo..hi of this byte as a number whose
+         * least significant bit is the least significant logical position
+         * of the region.  Under MSB-first numbering, that is logical hi,
+         * which sits at physical 7-hi.
+         */
+        if (lsb_first) {
+            chunk = (ptr[byte_index] >> lo) & ((1u << n) - 1);
+            shift = pos - beg;
+        }
+        else {
+            chunk = (ptr[byte_index] >> (7 - hi)) & ((1u << n) - 1);
+            shift = (end - 1) - (pos + n - 1);
+        }
+
+        if (buf) {
+            size_t i = (size_t)(shift / CHAR_BIT);
+            unsigned int off = (unsigned int)(shift % CHAR_BIT);
+            buf[i] |= (unsigned char)(chunk << off);
+            if (off + n > CHAR_BIT) buf[i + 1] |= (unsigned char)(chunk >> (CHAR_BIT - off));
+        }
+        else {
+            small |= (uint64_t)chunk << shift;
+        }
+        pos += n;
+    }
+
+    if (!buf) return ULL2NUM(small);
+
+    VALUE result = rb_integer_unpack(buf, buf_len, 1, 0, INTEGER_PACK_LSWORD_FIRST | INTEGER_PACK_NATIVE_BYTE_ORDER);
+    ALLOCV_END(tmp);
+    return result;
+}
+
 /*
  *  call-seq:
  *    bit_get(offset, lsb_first: true) -> 0, 1, or nil
+ *    bit_get(offset, length, lsb_first: true) -> integer or nil
+ *    bit_get(range, lsb_first: true) -> integer or nil
  *
  *  :include: doc/string/bit_get.rdoc
  *
@@ -7098,8 +7175,50 @@ str_bit_get(int argc, VALUE *argv, VALUE str)
 static VALUE
 rb_str_bit_get(int argc, VALUE *argv, VALUE str)
 {
-    int bit = str_bit_get(argc, argv, str);
-    return bit < 0 ? Qnil : INT2FIX(bit);
+    VALUE v0, v1, opts;
+    uint64_t beg = 0, len = 0;
+
+    int nargs = rb_scan_args(argc, argv, "11:", &v0, &v1, &opts);
+    bool lsb_first = str_lsb_first_from_opts(opts);
+
+    bool is_range = rb_obj_is_kind_of(v0, rb_cRange);
+    if (!is_range && nargs == 1) {
+        /* The one-bit form. */
+        int bit = str_bit_get_at(str, str_bit_offset_from_index(v0), lsb_first);
+        return bit < 0 ? Qnil : INT2FIX(bit);
+    }
+
+    /* The region form.  Coerce before the length is read: to_int may resize self. */
+    struct str_bit_range range = {0};
+    if (is_range) {
+        if (nargs == 2) {
+            rb_raise(rb_eArgError, "bit length not allowed with a Range");
+        }
+        str_bit_range_to_offsets(v0, &range);
+    }
+    else {
+        beg = str_bit_offset_from_index(v0).value;
+        len = str_bit_length_from_index(v1);
+    }
+
+    uint64_t total_bits = str_bit_size(RSTRING_LEN(str));
+    if (is_range) {
+        if (!str_bit_range_resolve(&range, total_bits, &beg, &len)) {
+            return Qnil;
+        }
+    }
+    else if (beg > total_bits) {
+        return Qnil;
+    }
+
+    /*
+     * Unlike bit_count, a region read does not clamp: a truncated value would
+     * be silently wrong.  A region that does not fit reads as nil, like one
+     * bit beyond the end.
+     */
+    if (len > total_bits - beg) return Qnil;
+    if (len == 0) return INT2FIX(0);
+    return str_bit_region_read((const unsigned char *)RSTRING_PTR(str), beg, len, lsb_first);
 }
 
 /*

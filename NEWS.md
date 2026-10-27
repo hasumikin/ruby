@@ -198,6 +198,8 @@ Note: We're only listing outstanding class updates.
       (with their `!` variants) handle whole strings. [[Feature #22118]]
     * `String#tr` now accept a Hash for multi-character replacement.
       [[Feature #22238]]
+    * `String#bit_get` now reads a bit region as an Integer with
+      `offset, length` or a Range. [[Feature #XXXXX]]
 
 * Symbol
 
@@ -750,6 +752,7 @@ A lot of work has gone into making Ractors more stable, performant, and usable. 
 [Feature #22238]: https://bugs.ruby-lang.org/issues/22238
 [Feature #22255]: https://bugs.ruby-lang.org/issues/22255
 [Feature #22297]: https://bugs.ruby-lang.org/issues/22297
+[Feature #XXXXX]: https://bugs.ruby-lang.org/issues/XXXXX
 [Feature #22309]: https://bugs.ruby-lang.org/issues/22309
 [Feature #22400]: https://bugs.ruby-lang.org/issues/22400
 [Feature #22441]: https://bugs.ruby-lang.org/issues/22441

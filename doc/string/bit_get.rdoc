@@ -8,6 +8,34 @@ Returns +nil+ if +offset+ is beyond the end of +self+:
 
   s.bit_get(8) # => nil
 
+With +offset+ and +length+, returns the +length+ bits beginning at +offset+ as
+a non-negative Integer; with a Range, returns the bits covered by +range+.
+This is the same extension that Integer#[] has for the bits of an Integer.
+By default, the first bit of the region is the least significant bit of the
+result, so a byte-aligned region reads as a little-endian number:
+
+  data = "\xF0\xAA"
+  data.bit_get(0, 8)  # => 240
+  data.bit_get(8, 8)  # => 170
+  data.bit_get(0, 4)  # => 0
+  data.bit_get(4, 4)  # => 15
+  data.bit_get(4, 8)  # => 175
+  data.bit_get(0..7)  # => 240
+  data.bit_get(0, 16) # => 43760
+
+A region that extends beyond the end of +self+ is not clamped, because a
+truncated value would be wrong; the method returns +nil+ instead. An empty
+region returns +0+, unless it begins beyond the end of +self+:
+
+  data.bit_get(8, 9)  # => nil
+  data.bit_get(16, 1) # => nil
+  data.bit_get(8, 0)  # => 0
+  data.bit_get(5..2)  # => 0
+  data.bit_get(16, 0) # => 0
+  data.bit_get(17, 0) # => nil
+
+The result has no width limit; a region wider than 64 bits returns a Bignum.
+
 By default, bits within each byte are numbered from least-significant to
 most-significant. If +lsb_first+ is +false+, byte order is unchanged but bits
 within each byte are numbered from most-significant to least-significant:
@@ -15,6 +43,19 @@ within each byte are numbered from most-significant to least-significant:
   s.bit_get(0, lsb_first: false) # => 1
   s.bit_get(1, lsb_first: false) # => 0
 
-Raises +IndexError+ if +offset+ is negative.
-Raises +ArgumentError+ if +offset+ is too large to be represented.
+For a region, +lsb_first: false+ also makes the first bit of the region the
+most significant bit of the result. This is the order of RFC bit diagrams and
+of other MSB-first packed formats:
+
+  "\xAC".bit_get(0, 4, lsb_first: false) # => 10
+  hdr = "\x12\x34\x81\x80"               # a DNS header
+  hdr.bit_get(0, 16, lsb_first: false)   # => 0x1234
+  hdr.bit_get(16, 16, lsb_first: false)  # => 0x8180
+  hdr.bit_get(4, 12, lsb_first: false)   # => 0x234
+
+The value is read from the bytes of +self+ and is independent of string
+encoding.
+Raises +IndexError+ if +offset+ or a Range endpoint is negative.
+Raises +ArgumentError+ if +length+ is negative.
+Raises +ArgumentError+ if a bit position is too large to be represented.
 Raises +ArgumentError+ if +lsb_first+ is neither +true+ nor +false+.
